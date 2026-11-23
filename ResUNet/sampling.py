@@ -2,48 +2,39 @@ import torch
 from einops import rearrange
 
 def generate_mask_pair(img, generator=None):
-    # time-variant sampling
-    # prepare masks (N x C x H/2 x W/2)
+    # time-locked sampling
     n, c, t, h, w = img.shape
-    mask1 = torch.zeros(size=(n * t * h // 2 * w // 2 * 4, ),
-                        dtype=torch.bool,
-                        device=img.device)
-    mask2 = torch.zeros(size=(n * t * h // 2 * w // 2 * 4, ),
-                        dtype=torch.bool,
-                        device=img.device)
-    mask3 = torch.zeros(size=(n * t * h // 2 * w // 2 * 4, ),
-                        dtype=torch.bool,
-                        device=img.device)
-    # prepare random mask pairs
+    h2, w2 = h // 2, w // 2
+
     idx_pair = torch.tensor([
         [0, 1, 2], [0, 2, 1],
         [1, 0, 3], [1, 3, 0],
         [2, 0, 3], [2, 3, 0],
         [3, 2, 1], [3, 1, 2]],
         dtype=torch.int64,
-        device=img.device)
-    rd_idx = torch.zeros(size=(n * t * h // 2 * w // 2, ),
-                         dtype=torch.int64,
-                         device=img.device)
-    torch.randint(low=0,
-                  high=8,
-                  size=(n * t * h // 2 * w // 2, ),
-                  out=rd_idx,
-                  generator=generator)
-    # [n * h // 2 * w // 2, ]
-    rd_pair_idx = idx_pair[rd_idx]
-    # [n * t * h // 2 * w // 2, 2]
+        device=img.device
+    )
 
-    rd_pair_idx += torch.arange(start=0,
-                                end=n * t * h // 2 * w // 2 * 4,
-                                step=4,
-                                dtype=torch.int64,
-                                device=img.device).reshape(-1, 1)
-    # get masks
-    mask1[rd_pair_idx[:, 0]] = 1
-    mask2[rd_pair_idx[:, 1]] = 1
-    mask3[rd_pair_idx[:, 2]] = 1
-    return mask1, mask2, mask3
+    # Use the same spatial selection at every time point.
+    rd_idx = torch.randint(
+        0, 8,
+        size=(n, h2, w2),
+        device=img.device,
+        generator=generator
+    )
+    pair = idx_pair[rd_idx]  # n,h2,w2,3
+
+    mask1 = torch.zeros((n, t, h2, w2, 4), dtype=torch.bool, device=img.device)
+    mask2 = torch.zeros_like(mask1)
+    mask3 = torch.zeros_like(mask1)
+
+    pair = pair[:, None, :, :, :].expand(n, t, h2, w2, 3)
+
+    mask1.scatter_(-1, pair[..., 0:1], True)
+    mask2.scatter_(-1, pair[..., 1:2], True)
+    mask3.scatter_(-1, pair[..., 2:3], True)
+
+    return mask1.reshape(-1), mask2.reshape(-1), mask3.reshape(-1)
 
 def generate_subimages(img, mask):
     n, c, t, h, w = img.shape
